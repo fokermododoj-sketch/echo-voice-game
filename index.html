@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#141615">
+  <title>ЭХО — голосовая игра</title>
+  <meta name="description" content="Слушай странные звуки, повторяй их голосом и соревнуйся с другом.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./catalog.css">
+  <script type="module" src="./game.mjs"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="mast">
+      <button class="identity clean" id="home" type="button" aria-label="ЭХО, на главную">
+        <span class="insignia" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span>ЭХО<span class="mark">.</span></span>
+      </button>
+      <nav aria-label="Режим игры">
+        <button class="tab active" id="solo-tab" type="button" aria-current="page">Тренировка</button>
+        <button class="tab" id="duo-tab" type="button">С другом</button>
+        <button class="tab" id="open-catalog" type="button">Фонотека</button>
+      </nav>
+      <span class="mast-meta">ГОЛОСОВАЯ ИГРА</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div><h1>Поймай звук<span class="mark">.</span></h1><p>Послушай образец, повтори его голосом и узнай, насколько близко получилось.</p></div>
+        <span class="connection" id="mode-label"><span></span> Тренировка</span>
+      </section>
+      <div class="desk">
+        <section class="console" aria-labelledby="sound-title">
+          <div class="console-top">
+            <div><span class="overline" id="category">Роботы</span><h2 id="sound-title">Холодный старт</h2></div>
+            <span class="round-tag" id="round-label">01 / 05</span>
+          </div>
+          <p class="prompt" id="sound-description"></p>
+          <p class="challenge" id="challenge" hidden></p>
+          <div class="studio">
+            <canvas id="studio-canvas" aria-hidden="true"></canvas>
+            <div class="studio-labels" aria-hidden="true">
+              <span><i></i> ТЫ</span><span id="studio-partner">ЭХО <i></i></span>
+            </div>
+          </div>
+          <div class="scope" id="scope" data-state="idle">
+            <div class="scope-header"><span><i aria-hidden="true"></i> <span id="scope-source">ОБРАЗЕЦ</span></span><span id="scope-readout">АУДИОСИГНАЛ</span></div>
+            <canvas id="spectrum" aria-hidden="true"></canvas>
+            <div class="scope-footer" aria-hidden="true"><span>00:00</span><span>01</span><span>02</span><span id="scope-end">03.2</span></div>
+          </div>
+          <p id="stage-status" class="stage-status" role="status" aria-live="polite"></p>
+          <div class="actions">
+            <button class="button secondary" id="listen" type="button"><span aria-hidden="true">▷</span> Образец</button>
+            <button class="button primary" id="record" type="button"><span class="rec-icon" aria-hidden="true"></span> Записать ответ</button>
+            <button class="button primary" id="next" type="button" hidden>Следующий звук <span aria-hidden="true">›</span></button>
+          </div>
+        </section>
+        <aside class="side">
+          <section class="panel score-panel" aria-labelledby="score-title">
+            <div class="panel-head"><h2 id="score-title">Точность</h2><span class="small-icon" aria-hidden="true">≋</span></div>
+            <div class="score-value"><strong id="score">—</strong><span>/ 100</span></div>
+            <div class="metrics">
+              <div><span>Ритм</span><progress id="rhythm" max="100" value="0" aria-label="Ритм"></progress><output id="rhythm-value">—</output></div>
+              <div><span>Высота</span><progress id="pitch" max="100" value="0" aria-label="Высота"></progress><output id="pitch-value">—</output></div>
+              <div><span>Тембр</span><progress id="tone" max="100" value="0" aria-label="Тембр"></progress><output id="tone-value">—</output></div>
+            </div>
+            <div class="score-actions">
+              <button class="text-button" id="replay" type="button" hidden>▷ Моя запись</button>
+              <button class="text-button" id="peer-replay" type="button" hidden>▷ Запись друга</button>
+            </div>
+          </section>
+          <section class="panel match-panel" aria-labelledby="match-title">
+            <div class="panel-head"><h2 id="match-title">Матч</h2><span class="overline neutral" id="match-length">5 раундов</span></div>
+            <div id="round-dots" class="round-dots" aria-label="Прогресс матча"></div>
+            <div class="totals">
+              <div><span>Ты</span> <strong id="my-total">0</strong></div>
+              <div id="peer-total-row" hidden><span>Друг</span> <strong id="peer-total">0</strong></div>
+              <div id="best-row"><span>Рекорд</span> <strong id="best-total">0</strong></div>
+            </div>
+            <p id="match-status" class="match-status" aria-live="polite"></p>
+            <button type="button" class="text-button match-settings" id="open-settings">Настройки матча</button>
+          </section>
+        </aside>
+      </div>
+      <footer>
+        <span>Микрофон включается на время записи.</span>
+        <div class="footer-controls">
+          <button type="button" class="text-button" id="restart">Начать сначала</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+  <dialog id="room" aria-labelledby="room-title">
+    <div class="room-head"><div><span class="overline">Онлайн</span><h2 id="room-title">Игра с другом</h2></div><button id="close-room" type="button" class="icon-button" aria-label="Закрыть">×</button></div>
+    <div class="room-tabs">
+      <button class="tab active" id="host-tab" type="button" aria-pressed="true">Создать комнату</button>
+      <button class="tab" id="join-tab" type="button" aria-pressed="false">Войти по коду</button>
+    </div>
+    <div id="host-panel" class="room-panel">
+      <p>Отправь другу приглашение. Когда он вернёт ответный код, вставь его сюда.</p>
+      <button class="button primary" id="make-offer" type="button">Создать приглашение</button>
+      <div id="offer-box" class="room-fields" hidden>
+        <label for="offer-output">Приглашение</label>
+        <textarea id="offer-output" rows="2" readonly spellcheck="false"></textarea>
+        <button class="button secondary" id="copy-offer" type="button">Копировать приглашение</button>
+        <label for="answer-input">Ответный код друга</label>
+        <textarea id="answer-input" rows="2" placeholder="Вставь ответный код" spellcheck="false"></textarea>
+        <button class="button primary" id="accept-answer" type="button">Подключить друга</button>
+      </div>
+    </div>
+    <div id="join-panel" class="room-panel" hidden>
+      <p>Вставь приглашение, получи ответный код и отправь его хозяину комнаты.</p>
+      <div class="room-fields">
+        <label for="offer-input">Код или ссылка-приглашение</label>
+        <textarea id="offer-input" rows="2" placeholder="Вставь приглашение" spellcheck="false"></textarea>
+        <button class="button primary" id="accept-offer" type="button">Получить ответный код</button>
+        <div id="answer-box" class="room-fields" hidden>
+          <label for="answer-output">Ответный код</label>
+          <textarea id="answer-output" rows="2" readonly spellcheck="false"></textarea>
+          <button class="button secondary" id="copy-answer" type="button">Копировать ответный код</button>
+        </div>
+      </div>
+    </div>
+    <p class="room-status" id="room-status" role="status" aria-live="polite">Откройте игру у себя и обменяйтесь кодами в чате.</p>
+    <p class="room-privacy">В матче ваша запись передаётся напрямую друг другу для прослушивания.</p>
+    <div class="room-bottom">
+      <button class="button primary" id="start-duo" type="button" hidden>Начать матч</button>
+      <button class="text-button" id="room-settings" type="button">Настройки матча</button>
+      <button class="text-button" id="leave-room" type="button" hidden>Выйти из комнаты</button>
+    </div>
+  </dialog>
+  <dialog id="settings" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <div class="room-head">
+        <h2 id="settings-title">Настройки матча</h2>
+        <button id="close-settings" type="button" class="icon-button" aria-label="Закрыть">×</button>
+      </div>
+      <fieldset class="setting-group">
+        <legend>Количество раундов</legend>
+        <div class="setting-pills">
+          <label><input type="radio" name="rounds" value="5"> 5</label>
+          <label><input type="radio" name="rounds" value="10"> 10</label>
+          <label><input type="radio" name="rounds" value="15"> 15</label>
+        </div>
+      </fieldset>
+      <fieldset class="setting-group">
+        <legend>Пакеты звуков</legend>
+        <div class="setting-pills" id="settings-packs"></div>
+      </fieldset>
+      <label class="setting-toggle"><input type="checkbox" name="party"> <span>Микс испытаний<small>Блиц, раунды на слух и двойной вес отдельных критериев.</small></span></label>
+      <label class="setting-toggle"><input type="checkbox" name="hints"> <span>Подсказки<small>Показывать словесную подсказку к образцу.</small></span></label>
+      <p class="room-status" id="settings-status" role="status"></p>
+      <button class="button primary" type="submit">Сохранить</button>
+    </form>
+  </dialog>
+</body>
+</html>
