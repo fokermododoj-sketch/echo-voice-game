@@ -127,7 +127,7 @@ export function createCatalog({ trigger, sounds, getTarget, playSamples, onPract
     status.textContent = 'Воспроизводится «' + sound.label + '».';
     renderPreview();
     try {
-      await playSamples(getTarget(sound.id));
+      await playSamples(await getTarget(sound.id));
       status.textContent = '';
     } catch {
       status.textContent = 'Звук сейчас недоступен. Попробуй ещё раз.';

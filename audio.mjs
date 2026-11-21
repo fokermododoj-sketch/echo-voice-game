@@ -1,3 +1,5 @@
+import { VOICE_CATEGORY, VOICE_CLIPS } from './voice-pack.mjs';
+
 export const SAMPLE_RATE = 16000;
 
 const FORMANTS = {
@@ -320,11 +322,19 @@ const RECIPES = [
   },
 ];
 
-export const SOUNDS = Object.freeze(RECIPES.map(({ id, label, category, description }) => (
-  Object.freeze({ id, label, category, description })
-)));
+export const SOUNDS = Object.freeze([
+  ...VOICE_CLIPS.map(({ id, label, description }) => (
+    Object.freeze({ id, label, category: VOICE_CATEGORY, description, speech: true })
+  )),
+  ...RECIPES.map(({ id, label, category, description }) => (
+    Object.freeze({ id, label, category, description })
+  )),
+]);
 
+const voiceDirectory = new URL('./assets/voice/', import.meta.url);
+const voiceFiles = new Map(VOICE_CLIPS.map(({ id, file }) => [id, file]));
 const targets = new Map();
+const pendingTargets = new Map();
 const TWO_PI = Math.PI * 2;
 const FIXED_HARMONICS = {
   whistle: [0.94, 0.14, 0.03],
@@ -418,7 +428,23 @@ export function getTarget(id) {
   return targets.get(id).slice();
 }
 
+export async function loadTarget(id) {
+  const file = voiceFiles.get(id);
+  if (!file || targets.has(id)) return getTarget(id);
+  if (!pendingTargets.has(id)) {
+    const pending = loadVoiceClip(file).then((samples) => targets.set(id, samples));
+    pendingTargets.set(id, pending);
+    pending.then(
+      () => pendingTargets.delete(id),
+      () => pendingTargets.delete(id),
+    );
+  }
+  await pendingTargets.get(id);
+  return getTarget(id);
+}
+
 let audioContext;
+let voiceDecoder;
 let recordingInProgress = false;
 
 function openAudioContext() {
@@ -426,6 +452,22 @@ function openAudioContext() {
   if (!AudioContextClass) throw new Error('Этот браузер не поддерживает обработку звука.');
   if (!audioContext || audioContext.state === 'closed') audioContext = new AudioContextClass();
   return audioContext;
+}
+
+async function loadVoiceClip(file) {
+  const response = await fetch(new URL(file, voiceDirectory));
+  if (!response.ok) throw new Error('Реплика не загрузилась. Попробуй ещё раз.');
+  const OfflineContext = globalThis.OfflineAudioContext || globalThis.webkitOfflineAudioContext;
+  voiceDecoder ??= OfflineContext ? new OfflineContext(1, 1, SAMPLE_RATE) : openAudioContext();
+  const decoded = await voiceDecoder.decodeAudioData(await response.arrayBuffer());
+  if (!decoded.length || decoded.duration > 12) throw new Error('Не удалось прочитать реплику.');
+  if (decoded.numberOfChannels === 1) return resample(decoded.getChannelData(0), decoded.sampleRate);
+  const mono = new Float32Array(decoded.length);
+  for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+    const samples = decoded.getChannelData(channel);
+    for (let i = 0; i < mono.length; i += 1) mono[i] += samples[i] / decoded.numberOfChannels;
+  }
+  return resample(mono, decoded.sampleRate);
 }
 
 export async function playSamples(samples, sampleRate = SAMPLE_RATE) {
@@ -634,11 +676,60 @@ function roundScore(fraction) {
   return Math.round(Math.max(0, Math.min(1, fraction)) * 100);
 }
 
-export function scoreSamples(recording, target) {
+const comparisonBins = 40;
+const utteranceWarp = 6;
+
+function comparisonFrames(frames) {
+  return Array.from({ length: comparisonBins }, (_, bin) => (
+    frames[Math.round(bin * (frames.length - 1) / (comparisonBins - 1))]
+  ));
+}
+
+function alignSpeech(actual, expected) {
+  const width = comparisonBins + 1;
+  const costs = new Float64Array(width * width).fill(Infinity);
+  const directions = new Uint8Array(costs.length);
+  costs[0] = 0;
+
+  // Match nearby syllables while allowing the player to vary their pace.
+  for (let row = 1; row < width; row += 1) {
+    const attempt = actual[row - 1];
+    for (let column = Math.max(1, row - utteranceWarp); column <= Math.min(comparisonBins, row + utteranceWarp); column += 1) {
+      const reference = expected[column - 1];
+      const index = row * width + column;
+      const diagonal = costs[index - width - 1];
+      const vertical = costs[index - width] + 0.14;
+      const horizontal = costs[index - 1] + 0.14;
+      const best = Math.min(diagonal, vertical, horizontal);
+      directions[index] = best === diagonal ? 0 : best === vertical ? 1 : 2;
+      costs[index] = best + Math.abs(attempt.envelope - reference.envelope)
+        + 0.45 * Number(attempt.active !== reference.active)
+        + 0.25 * Number((attempt.note === null) !== (reference.note === null));
+    }
+  }
+
+  const pairs = [];
+  let row = comparisonBins;
+  let column = comparisonBins;
+  while (row > 0 && column > 0) {
+    pairs.push([actual[row - 1], expected[column - 1]]);
+    const direction = directions[row * width + column];
+    if (direction !== 2) row -= 1;
+    if (direction !== 1) column -= 1;
+  }
+  return pairs;
+}
+
+export function scoreSamples(recording, target, { speech = false } = {}) {
   const attempt = analyze(recording);
   const reference = analyze(target);
   if (!attempt || !reference) return { ...NO_SCORE };
 
+  const actualFrames = comparisonFrames(attempt);
+  const expectedFrames = comparisonFrames(reference);
+  const pairs = speech
+    ? alignSpeech(actualFrames, expectedFrames)
+    : actualFrames.map((frame, index) => [frame, expectedFrames[index]]);
   const contourErrors = [];
   const envelopeErrors = [];
   const activityErrors = [];
@@ -646,10 +737,7 @@ export function scoreSamples(recording, target) {
   let referencePitch = 0;
   let referenceNoise = 0;
   let pairedNoise = 0;
-  for (let bin = 0; bin < 40; bin += 1) {
-    const point = bin / 39;
-    const actual = attempt[Math.round(point * (attempt.length - 1))];
-    const expected = reference[Math.round(point * (reference.length - 1))];
+  for (const [actual, expected] of pairs) {
     envelopeErrors.push(Math.abs(actual.envelope - expected.envelope));
     activityErrors.push(Number(actual.active !== expected.active));
     if (expected.note !== null) {
@@ -671,7 +759,8 @@ export function scoreSamples(recording, target) {
   const octaveOffset = offset - 12 * Math.round(offset / 12);
   const matchingRegister = 0.7 * Math.exp(-Math.abs(offset) / 14) + 0.3 * Math.exp(-Math.abs(octaveOffset) / 4.5);
   const curveSimilarity = Math.exp(-mean(contourErrors.map((error) => Math.abs(error - offset))) / 5.2);
-  const matchedPitch = pairedPitch * (matchingRegister * 0.35 + curveSimilarity * 0.65);
+  const registerWeight = speech ? 0.2 : 0.35;
+  const matchedPitch = pairedPitch * (matchingRegister * registerWeight + curveSimilarity * (1 - registerWeight));
   const pitch = roundScore((matchedPitch + pairedNoise) / Math.max(1, referencePitch + referenceNoise));
 
   const actualTone = estimateTone(attempt);

@@ -9,7 +9,7 @@
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./catalog.css">
-  <script type="module" src="./game.mjs"></script>
+  <script type="module" src="./game.mjs?v=voice-1"></script>
 </head>
 <body>
   <div class="shell">
@@ -27,13 +27,13 @@
     </header>
     <main>
       <section class="intro">
-        <div><h1>Поймай звук<span class="mark">.</span></h1><p>Послушай образец, повтори его голосом и узнай, насколько близко получилось.</p></div>
+        <div><h1>Поймай звук<span class="mark">.</span></h1><p>Послушай реплику, поймай паузы и интонацию, потом повтори её в микрофон.</p></div>
         <span class="connection" id="mode-label"><span></span> Тренировка</span>
       </section>
       <div class="desk">
         <section class="console" aria-labelledby="sound-title">
           <div class="console-top">
-            <div><span class="overline" id="category">Роботы</span><h2 id="sound-title">Холодный старт</h2></div>
+            <div><span class="overline" id="category">Мемные реплики</span><h2 id="sound-title">Первый раунд</h2></div>
             <span class="round-tag" id="round-label">01 / 05</span>
           </div>
           <p class="prompt" id="sound-description"></p>
@@ -47,11 +47,11 @@
           <div class="scope" id="scope" data-state="idle">
             <div class="scope-header"><span><i aria-hidden="true"></i> <span id="scope-source">ОБРАЗЕЦ</span></span><span id="scope-readout">АУДИОСИГНАЛ</span></div>
             <canvas id="spectrum" aria-hidden="true"></canvas>
-            <div class="scope-footer" aria-hidden="true"><span>00:00</span><span>01</span><span>02</span><span id="scope-end">03.2</span></div>
+            <div class="scope-footer" aria-hidden="true"><span>0</span><span id="scope-first"></span><span id="scope-second"></span><span id="scope-end"></span></div>
           </div>
           <p id="stage-status" class="stage-status" role="status" aria-live="polite"></p>
           <div class="actions">
-            <button class="button secondary" id="listen" type="button"><span aria-hidden="true">▷</span> Образец</button>
+            <button class="button secondary" id="listen" type="button"><span aria-hidden="true">▷</span> <span id="listen-label">Образец</span></button>
             <button class="button primary" id="record" type="button"><span class="rec-icon" aria-hidden="true"></span> Записать ответ</button>
             <button class="button primary" id="next" type="button" hidden>Следующий звук <span aria-hidden="true">›</span></button>
           </div>

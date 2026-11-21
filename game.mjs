@@ -1,15 +1,18 @@
 import { PeerLink } from './network.mjs';
-import { SOUNDS, SAMPLE_RATE, getTarget, playSamples, recordSamples, scoreSamples, encodeSamples, decodeSamples } from './audio.mjs';
+import { SOUNDS, SAMPLE_RATE, loadTarget, playSamples, recordSamples, scoreSamples, encodeSamples, decodeSamples } from './audio.mjs?v=voice-1';
 import { createStage } from './stage.mjs';
-import { createCatalog } from './catalog.mjs';
+import { createCatalog } from './catalog.mjs?v=voice-1';
+import { VOICE_CATEGORY } from './voice-pack.mjs';
 
 const byId = id => document.getElementById(id);
 const roundOptions = [5, 10, 15];
 const defaultRecordTime = 3200;
+const voiceRecordTime = 4000;
+const emptyWave = new Float32Array();
 const roundsStore = 'echo-settings';
 const pieceSize = 12_000;
 const piecePattern = new RegExp('.{1,' + pieceSize + '}', 'g');
-const maxPieces = Math.ceil((Math.ceil(SAMPLE_RATE * defaultRecordTime / 1000) * 8 / 3 + 16) / pieceSize) + 1;
+const maxPieces = Math.ceil((Math.ceil(SAMPLE_RATE * voiceRecordTime / 1000) * 8 / 3 + 16) / pieceSize) + 1;
 const soundById = new Map(SOUNDS.map(sound => [sound.id, sound]));
 const categories = [...new Set(SOUNDS.map(sound => sound.category))];
 const rules = new Map([
@@ -36,9 +39,11 @@ let backToRoom = false;
 let match;
 let cue;
 let target;
+let targetState;
 let heard;
 let ownTake;
 let friendTake;
+let deferredFriend;
 let incoming;
 let busy;
 let showFriend;
@@ -52,10 +57,11 @@ let libraryPlaying = false;
 let preferences = loadPreferences();
 
 function loadPreferences() {
-  const defaults = { count: 5, packs: categories, hints: true, party: false };
+  const defaultPacks = categories.includes(VOICE_CATEGORY) ? [VOICE_CATEGORY] : categories;
+  const defaults = { count: 5, packs: defaultPacks, hints: true, party: false };
   try {
     const saved = JSON.parse(localStorage.getItem(roundsStore));
-    const packs = categories.filter(category => saved?.packs?.includes?.(category));
+    const packs = saved?.version === 2 ? categories.filter(category => saved.packs?.includes?.(category)) : defaultPacks;
     if (!roundOptions.includes(saved?.count) || !packs.length) return defaults;
     return { count: saved.count, packs, hints: saved.hints !== false, party: saved.party === true };
   } catch {
@@ -132,10 +138,12 @@ function startMatch(mode, rounds = chooseRounds(), options = {}) {
 function setRound(index) {
   match.index = index;
   cue = soundById.get(match.rounds[index]);
-  target = getTarget(cue.id);
+  target = emptyWave;
+  targetState = 'loading';
   heard = false;
   ownTake = null;
   friendTake = null;
+  deferredFriend = null;
   incoming = null;
   busy = '';
   showFriend = false;
@@ -144,6 +152,33 @@ function setRound(index) {
   micStarted = 0;
   soundStarted = 0;
   render();
+  void prepareTarget();
+}
+
+async function prepareTarget() {
+  const currentMatch = match;
+  const index = match.index;
+  const id = cue.id;
+  const isCurrent = () => match === currentMatch && match.index === index;
+  targetState = 'loading';
+  render();
+  try {
+    const samples = await loadTarget(id);
+    if (!isCurrent()) return;
+    target = samples;
+    shownWave = samples;
+    targetState = 'ready';
+    if (deferredFriend) {
+      gradeFriend(deferredFriend);
+      deferredFriend = null;
+    }
+    const next = match.rounds[index + 1];
+    if (next) void loadTarget(next).catch(() => {});
+  } catch {
+    if (isCurrent()) targetState = 'error';
+  } finally {
+    if (isCurrent()) render();
+  }
 }
 
 function activeRule() {
@@ -151,11 +186,12 @@ function activeRule() {
 }
 
 function roundTime() {
+  if (cue.speech) return activeRule().duration ? 3400 : voiceRecordTime;
   return activeRule().duration ?? defaultRecordTime;
 }
 
 function grade(samples) {
-  const score = scoreSamples(samples, target);
+  const score = scoreSamples(samples, target, { speech: Boolean(cue.speech) });
   const emphasis = activeRule().emphasis;
   return emphasis ? { ...score, total: Math.round((score.rhythm + score.pitch + score.tone + score[emphasis]) / 4) } : score;
 }
@@ -176,8 +212,13 @@ function finishRound() {
 
 function hint() {
   if (status) return status;
-  if (busy === 'demo') return 'Слушай, где звук меняет высоту и ритм.';
-  if (busy === 'recording') return micStarted ? 'Запись идёт. Повторяй звук!' : 'Разреши доступ к микрофону в браузере.';
+  if (targetState === 'loading') return 'Загружаем образец…';
+  if (targetState === 'error') return 'Образец не загрузился. Попробуй ещё раз.';
+  if (busy === 'demo') return cue.speech ? 'Лови паузы и интонацию в конце фразы.' : 'Слушай, где звук меняет высоту и ритм.';
+  if (busy === 'recording') {
+    if (!micStarted) return 'Разреши доступ к микрофону в браузере.';
+    return cue.speech ? 'Запись идёт. Повторяй реплику!' : 'Запись идёт. Повторяй звук!';
+  }
   if (busy === 'replay') return showFriend ? 'Воспроизводится запись друга.' : 'Воспроизводится твоя запись.';
   if (match.complete) return match.practice ? 'Звук сыгран. Можно попробовать ещё раз.' : 'Все раунды сыграны.';
   if (ownTake && isOnline() && !friendTake) return 'Ответ отправлен. Ждём запись друга.';
@@ -195,7 +236,9 @@ function render() {
   byId('sound-title').textContent = cue.label;
   const showHint = match.rules[match.index] !== 'ear' && match.hints;
   byId('sound-description').textContent = showHint ? cue.description : 'Повтори, что услышишь в образце.';
-  byId('challenge').textContent = activeRule().label;
+  byId('challenge').textContent = activeRule().duration
+    ? 'Блиц · ' + (roundTime() / 1000).toLocaleString('ru-RU') + ' секунды на ответ'
+    : activeRule().label;
   byId('challenge').hidden = !activeRule().label;
   byId('studio-partner').firstChild.textContent = online ? 'ДРУГ ' : 'ЭХО ';
   byId('round-label').textContent = String(match.index + 1).padStart(2, '0') + ' / ' + String(match.rounds.length).padStart(2, '0');
@@ -206,9 +249,10 @@ function render() {
   byId(online ? 'solo-tab' : 'duo-tab').removeAttribute('aria-current');
   byId(online ? 'duo-tab' : 'solo-tab').setAttribute('aria-current', 'page');
 
-  byId('listen').disabled = Boolean(busy || libraryPlaying);
+  byId('listen').disabled = Boolean(busy || libraryPlaying || targetState === 'loading');
+  byId('listen-label').textContent = targetState === 'error' ? 'Повторить загрузку' : 'Образец';
   byId('record').hidden = Boolean(ownTake);
-  byId('record').disabled = Boolean(busy || libraryPlaying || !heard || onlineLost);
+  byId('record').disabled = Boolean(busy || libraryPlaying || !heard || onlineLost || targetState !== 'ready');
   byId('next').hidden = !canAdvance;
   byId('next').disabled = Boolean(busy || onlineLost);
   byId('next').textContent = match.complete ? (match.practice ? 'Повторить звук' : 'Сыграть ещё') : 'Следующий звук';
@@ -246,7 +290,10 @@ function render() {
   scope.dataset.state = busy === 'recording' ? 'recording' : 'idle';
   byId('scope-source').textContent = busy === 'recording' ? 'МИКРОФОН' : shownWave === ownTake?.samples ? 'МОЯ ЗАПИСЬ' : shownWave === friendTake?.samples ? 'ЗАПИСЬ ДРУГА' : 'ОБРАЗЕЦ';
   byId('scope-readout').textContent = busy === 'recording' ? (micStarted ? 'ИДЁТ ЗАПИСЬ' : 'ПОДКЛЮЧЕНИЕ') : busy ? 'ВОСПРОИЗВЕДЕНИЕ' : 'АУДИОСИГНАЛ';
-  byId('scope-end').textContent = (roundTime() / 1000).toFixed(1).padStart(4, '0');
+  const seconds = roundTime() / 1000;
+  for (const [id, ratio] of [['scope-first', 1 / 3], ['scope-second', 2 / 3], ['scope-end', 1]]) {
+    byId(id).textContent = (seconds * ratio).toFixed(1).replace('.', ',');
+  }
   if (!frame) frame = requestAnimationFrame(drawScope);
   renderRoom();
 }
@@ -333,6 +380,11 @@ new ResizeObserver(() => {
 
 async function listen(take = null) {
   if (busy || libraryPlaying || (take && !take.samples)) return;
+  if (targetState === 'error' && !take) {
+    await prepareTarget();
+    return;
+  }
+  if (targetState !== 'ready') return;
   const playingMatch = match;
   const playingRound = match.index;
   status = '';
@@ -363,7 +415,7 @@ function microphoneError(error) {
 }
 
 async function record() {
-  if (busy || libraryPlaying || !heard || ownTake || (isOnline() && peerLink?.state !== 'open')) return;
+  if (busy || libraryPlaying || targetState !== 'ready' || !heard || ownTake || (isOnline() && peerLink?.state !== 'open')) return;
   const recordingMatch = match;
   const recordingRound = match.index;
   busy = 'recording';
@@ -409,8 +461,14 @@ async function record() {
   }
 }
 
+function gradeFriend(samples) {
+  friendTake = { samples, score: grade(samples) };
+  match.friend += friendTake.score.total;
+  finishRound();
+}
+
 function acceptTake(message) {
-  if (friendTake || !Number.isInteger(message.length) || message.length < 1 || message.length > maxPieces ||
+  if (friendTake || deferredFriend || !Number.isInteger(message.length) || message.length < 1 || message.length > maxPieces ||
       !Number.isInteger(message.index) || message.index < 0 || message.index >= message.length ||
       typeof message.piece !== 'string' || message.piece.length > pieceSize) return;
   if (message.index === 0) incoming = { length: message.length, parts: [] };
@@ -421,9 +479,8 @@ function acceptTake(message) {
   try {
     const samples = decodeSamples(incoming.parts.join(''));
     if (samples.length > SAMPLE_RATE * (roundTime() + 100) / 1000) throw new Error();
-    friendTake = { samples, score: grade(samples) };
-    match.friend += friendTake.score.total;
-    finishRound();
+    if (targetState === 'ready') gradeFriend(samples);
+    else deferredFriend = samples;
     render();
   } catch {
     peerLink?.close();
@@ -610,7 +667,7 @@ settingsForm.addEventListener('submit', event => {
     byId('settings-status').textContent = 'Выбери хотя бы один пакет звуков.';
     return;
   }
-  preferences = { count: Number(values.get('rounds')), packs, party: values.has('party'), hints: values.has('hints') };
+  preferences = { version: 2, count: Number(values.get('rounds')), packs, party: values.has('party'), hints: values.has('hints') };
   try { localStorage.setItem(roundsStore, JSON.stringify(preferences)); } catch { /* Storage may be disabled. */ }
   if (!isOnline()) startMatch('solo');
   settingsDialog.close();
@@ -619,7 +676,7 @@ settingsForm.addEventListener('submit', event => {
 createCatalog({
   trigger: byId('open-catalog'),
   sounds: SOUNDS,
-  getTarget,
+  getTarget: loadTarget,
   onPractice: startPractice,
   async playSamples(samples) {
     if (busy || libraryPlaying) throw new Error('Дождись окончания записи или воспроизведения.');
